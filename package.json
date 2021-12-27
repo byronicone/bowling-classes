@@ -1,0 +1,20 @@
+{
+  "name": "bowling-classes",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "bowling as an object oriented program",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --testPathPattern=index.test.js",
+    "testw": "npm test -- --watchAll",
+    "start": "node index.js"
+  },
+  "author": "Byron Barnes",
+  "license": "ISC",
+  "devDependencies": {
+    "@babel/core": "^7.15.8",
+    "@babel/preset-env": "^7.15.8",
+    "babel-jest": "^27.3.1",
+    "jest": "^27.3.1"
+  }
+}
