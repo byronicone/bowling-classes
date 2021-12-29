@@ -1,32 +1,55 @@
+const DEFAULT_NUM_FRAMES = 10;
+const DEFAULT_NUM_BOWLS = 2;
+
 export class BowlingGame {
   players = {};
+  currentFrameNum = 0;
+  history = [];
 
-  constructor(frames = 10) {
-    this.frames = frames;
+  constructor(frames = DEFAULT_NUM_FRAMES) {
+    this.totalFrames = frames;
   }
 
   getPlayer(id) {
-    return this.scoreboard[id];
+    return this.players[id];
+  }
+
+  setPlayer(player) {
+    this.players[player.id] = player;
   }
 
   addPlayer(name) {
-    const newPlayer = new Player(name, this.frames);
-    this.players[newPlayer.id] = newPlayer;
+    const newPlayer = new Player(name, this.totalFrames);
+    this.setPlayer(newPlayer);
   }
 
   start() {
+    this.currentFrameNum = 0;
     for (let id in this.players) {
-      this.players[id].reset();
+      this.getPlayer(id).reset();
     }
+  }
+
+  bowlFrame() {
+    for (let id in this.players) {
+      this.getPlayer(id).takeTurn(this.currentFrameNum);
+    }
+    this.currentFrameNum++;
+  }
+
+  endGame() {
+    this.history.push(this.players);
+    return this.getWinner();
   }
 
   getWinner() {
     let maxScore = -1;
     let winner = null;
     for (let id in this.players) {
-      if (this.players[id].score > maxScore) {
+      const playerScore = this.players[id].getScore();
+      if (playerScore > maxScore) {
         winner = this.players[id];
-        maxScore = this.players[id].score;
+        maxScore = playerScore;
       }
     }
     return winner;
@@ -34,49 +57,49 @@ export class BowlingGame {
 }
 
 export class Player {
-  turn = 0;
-  score = 0;
-
   constructor(name, frames) {
     this.name = name;
     this.id = this.#generateUID(name);
     this.frames = frames;
   }
 
+  getScore() {
+    return this.scorecard.getScore();
+  }
+
   reset() {
     this.scorecard = new ScoreCard(this.frames);
-    this.turn = 0;
-    this.score = 0;
   }
 
   #generateUID(name) {
     return name.split(" ").join("").toLowerCase() + Date.now();
   }
 
-  takeTurn() {
-    const frame = new Frame(this.turn);
-    while (!frame.isComplete()) {
-      frame.add(this.bowl());
-    }
-    this.turn++;
+  takeTurn(frameNum) {
+    this.scorecard.addFrame(frameNum, this.score);
+    while (this.scorecard.needsBowls()) {
+      //await physical / virtual bowl input
+      const pinsDown = this.bowl();
 
-    if (this.turn === 10) {
-      this.maybeFillLastFrame(frame);
+      if (this.scorecard.needsFills()) {
+        this.scorecard.fillFrames(pinsDown);
+      }
+
+      this.scorecard.addBowl(frameNum, pinsDown);
     }
 
-    this.scorecard.maybeFillFrames(frame);
-    this.scorecard.addFrame(frame);
-    this.score = this.scorecard.getTotalScore(this.turn);
-  }
-
-  maybeFillLastFrame(frame) {
-    const virtualFrame = new Frame(10);
-    let numFills = frame.fillsNeeded;
-    while (numFills > 0) {
-      virtualFrame.add(this.bowl());
-      numFills--;
+    if (!this.scorecard.isEndGame()) {
+      this.scorecard.scoreFrame(frameNum);
     }
-    frame.fill(virtualFrame);
+
+    if (
+      (this.scorecard.isEndGame() || this.scorecard.isLastFrame()) &&
+      this.scorecard.needsFills()
+    ) {
+      this.takeTurn(frameNum + 1);
+    } else if (this.scorecard.isEndGame() && !this.scorecard.needsFills()) {
+      this.scorecard.removeExtraFrames();
+    }
   }
 
   bowl() {
@@ -86,85 +109,113 @@ export class Player {
   }
 }
 
-class Frame {
-  runningScore = 0;
+class ScoreCard {
+  frames;
+  fillQueue = [];
+  score = 0;
 
-  constructor(turn) {
-    this.scores = [];
-    this.fills = [];
-    this.frameNumber = turn;
-    this.fillsNeeded = 2;
+  constructor(maxFrames) {
+    this.frames = [];
+    this.maxFrames = maxFrames;
   }
 
-  add(pinCount) {
-    this.scores.push(pinCount);
-    if (!this.isMark()) {
-      this.fillsNeeded--;
+  getScore() {
+    return this.score;
+  }
+
+  addFrame() {
+    const frame = new Frame(this.frames.length, this.score);
+    this.frames.push(frame);
+    return frame;
+  }
+
+  addBowl(frameNum, pinsDown) {
+    this.frames[frameNum].addPins(pinsDown);
+  }
+
+  scoreFrame(frameNum) {
+    const frame = this.frames[frameNum];
+    if (frame.needsFill()) {
+      this.fillQueue.push(frame);
+    } else {
+      this.score += frame.calculateScore();
     }
   }
 
-  isComplete() {
-    return this.isMark() || this.canBeScored();
+  needsBowls() {
+    return this.frames.filter((f) => !f.isComplete()).length > 0;
   }
 
-  canBeScored() {
-    return this.fillsNeeded === 0;
+  needsFills() {
+    return this.fillQueue.length > 0;
   }
 
-  isMark() {
-    return this.scores.reduce((total, cur) => total + cur, 0) === 10;
-  }
-
-  calculateScore(previousScore = 0) {
-    this.runningScore = this.scores
-      .concat(this.fills)
-      .reduce((total, score) => total + score, previousScore);
-  }
-
-  fill(nextFrame) {
-    let idx = 0;
-    while (this.fillsNeeded > 0 && idx < nextFrame.scores.length) {
-      this.fills.push(nextFrame.scores[idx]);
-      this.fillsNeeded--;
+  fillFrames(pinsDown) {
+    if (this.fillQueue?.length) {
+      const remaining = [];
+      for (const frame of this.fillQueue) {
+        frame.fill(pinsDown);
+        if (frame.fillsNeeded > 0) {
+          remaining.push(frame);
+        } else {
+          this.score += frame.calculateScore();
+        }
+      }
+      this.fillQueue = remaining;
     }
+    return this;
+  }
+
+  removeExtraFrames() {
+    this.frames = this.frames.slice(0, this.maxFrames);
+  }
+
+  isLastFrame() {
+    return this.frames.length === this.maxFrames;
+  }
+
+  isEndGame() {
+    return this.frames.length > this.maxFrames;
   }
 }
 
-class ScoreCard {
-  card;
-  frameFillQueue = [];
-  constructor(numFrames) {
-    this.card = new Array(numFrames);
+class Frame {
+  constructor(turn) {
+    this.scores = [];
+    this.fills = [];
+    this.frameNum = turn;
+    this.fillsNeeded = DEFAULT_NUM_BOWLS;
   }
 
-  addFrame(frame) {
-    if (!frame.canBeScored()) {
-      this.frameFillQueue.push(frame);
-    } else {
-      frame.calculateScore(this.getRunningScore(frame.frameNumber));
-    }
-
-    this.card[frame.frameNumber] = frame;
-  }
-
-  maybeFillFrames(curFrame) {
-    if (this.frameFillQueue?.length) {
-      const frame = this.frameFillQueue.shift();
-      frame.fill(curFrame);
-      if (frame.fillsNeeded > 0) {
-        this.frameFillQueue.unshift();
-      } else {
-        frame.calculateScore(this.getRunningScore(frame.frameNumber));
-      }
+  addPins(pinCount) {
+    this.scores.push(pinCount);
+    if (!this.hasMaxScore()) {
+      this.fillsNeeded--;
     }
   }
 
-  getRunningScore(frameNumber) {
-    if (frameNumber === 0) return 0;
-    return this.card[frameNumber - 1].runningScore;
+  fill(pinsDown) {
+    this.fills.push(pinsDown);
+    this.fillsNeeded--;
   }
 
-  getTotalScore(turn) {
-    return this.card[turn - 1].runningScore;
+  isComplete() {
+    return this.hasMaxScore() || !this.needsFill();
+  }
+
+  needsFill() {
+    return this.fillsNeeded > 0;
+  }
+
+  hasMaxScore() {
+    return this.scores.reduce((total, cur) => total + cur, 0) === 10;
+  }
+
+  calculateScore() {
+    this.frameScore = this.scores
+      .concat(this.fills)
+      .reduce((total, pins) => total + pins, 0);
+
+    return this.frameScore;
   }
 }
